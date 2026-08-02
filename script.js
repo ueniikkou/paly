@@ -11,7 +11,7 @@ let lastX = 0;
 let lastY = 0;
 let isAnimating = false;
 
-// 设置画布大小
+// 画布自适应
 function resizeCanvas() {
   canvas.width = window.innerWidth;
   canvas.height = window.innerHeight - 60;
@@ -65,43 +65,59 @@ function draw(e) {
 function stopDraw() {
   if (!drawing || isAnimating) return;
   drawing = false;
-  if (points.length < 8) return;
+  if (points.length < 10) return;
 
   isAnimating = true;
-  startMorphAnimation([...points]); // 复制一份
+  startBendMorph([...points]);
 }
 
-// ==================== 变形动画（模仿 Penint 感觉） ====================
-function startMorphAnimation(strokePoints) {
-  // 生成目标形状（沿路径分布）
+// ==================== 核心：线条弯曲变形动画 ====================
+function startBendMorph(originalPoints) {
+  // 1. 决定最终要生成的形状位置（沿原路径分布）
   const shapes = [];
-  const count = Math.min(Math.floor(strokePoints.length / 6) + 3, 14);
+  const shapeCount = Math.min(Math.floor(originalPoints.length / 7) + 2, 12);
 
-  for (let i = 0; i < count; i++) {
-    const idx = Math.floor((i / (count - 1 || 1)) * (strokePoints.length - 1));
-    const p = strokePoints[idx];
+  for (let i = 0; i < shapeCount; i++) {
+    const idx = Math.floor((i / (shapeCount - 1 || 1)) * (originalPoints.length - 1));
+    const p = originalPoints[idx];
     shapes.push({
-      x: p.x,
-      y: p.y,
-      targetSize: 16 + Math.random() * 24,
+      x: p.x + (Math.random() - 0.5) * 20,
+      y: p.y + (Math.random() - 0.5) * 20,
+      size: 18 + Math.random() * 22,
       color: ['#FFD700', '#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FFEAA7', '#DDA0DD', '#FF9FF3'][Math.floor(Math.random() * 8)],
-      isStar: Math.random() > 0.42,
-      // 轻微随机偏移，让最终位置不那么死板
-      offsetX: (Math.random() - 0.5) * 40,
-      offsetY: (Math.random() - 0.5) * 40
+      isStar: Math.random() > 0.4
     });
   }
 
-  const duration = 1600; // 动画时长（毫秒），可调
+  // 2. 给原路径的每个点分配一个「目标形状」
+  const pointTargets = originalPoints.map((p, i) => {
+    // 找到最近的形状
+    let nearest = shapes[0];
+    let minDist = Infinity;
+    shapes.forEach(s => {
+      const d = (p.x - s.x) ** 2 + (p.y - s.y) ** 2;
+      if (d < minDist) {
+        minDist = d;
+        nearest = s;
+      }
+    });
+    return {
+      origin: { x: p.x, y: p.y },
+      target: { x: nearest.x, y: nearest.y },
+      shape: nearest
+    };
+  });
+
+  const duration = 1800; // 变形总时长（毫秒）
   const startTime = performance.now();
 
-  // 为了让变形过程更清晰，我们先把当前自由线用白色稍微盖一层（减弱存在感）
-  ctx.strokeStyle = 'rgba(255,255,255,0.6)';
-  ctx.lineWidth = Number(sizeInput.value) + 4;
+  // 先把原来的实线用半透明白色稍微盖一层，方便后面动画覆盖
+  ctx.strokeStyle = 'rgba(255,255,255,0.7)';
+  ctx.lineWidth = Number(sizeInput.value) + 6;
   ctx.beginPath();
-  ctx.moveTo(strokePoints[0].x, strokePoints[0].y);
-  for (let i = 1; i < strokePoints.length; i++) {
-    ctx.lineTo(strokePoints[i].x, strokePoints[i].y);
+  ctx.moveTo(originalPoints[0].x, originalPoints[0].y);
+  for (let i = 1; i < originalPoints.length; i++) {
+    ctx.lineTo(originalPoints[i].x, originalPoints[i].y);
   }
   ctx.stroke();
 
@@ -109,61 +125,62 @@ function startMorphAnimation(strokePoints) {
     const elapsed = now - startTime;
     let t = Math.min(elapsed / duration, 1);
 
-    // 缓动：先快后慢（更有「被矫正」的感觉）
-    const ease = 1 - Math.pow(1 - t, 2.5);
+    // 缓动曲线（先慢后快再慢，更有「被拉过去」的感觉）
+    const ease = t < 0.5 
+      ? 2 * t * t 
+      : 1 - Math.pow(-2 * t + 2, 2) / 2;
 
-    // ---------- 1. 画正在消失的原始线条（带抖动） ----------
-    if (t < 0.85) {
-      const fade = 1 - ease;
-      const jitter = (1 - ease) * 3; // 抖动强度随时间减小
+    // ---------- 清空当前帧需要重画的区域（用白色覆盖整条原路径附近） ----------
+    // 为了简单稳定，我们每帧都重新画变形中的线 + 形状
 
+    // 1. 画正在弯曲收缩的线条
+    if (t < 0.92) {
       ctx.save();
-      ctx.globalAlpha = fade * 0.9;
+      ctx.globalAlpha = 1 - ease * 0.85;
       ctx.strokeStyle = colorInput.value;
-      ctx.lineWidth = Number(sizeInput.value) * (1 - ease * 0.7);
+      ctx.lineWidth = Number(sizeInput.value) * (1 - ease * 0.6);
       ctx.beginPath();
 
-      for (let i = 0; i < strokePoints.length; i++) {
-        const p = strokePoints[i];
+      for (let i = 0; i < pointTargets.length; i++) {
+        const pt = pointTargets[i];
+        // 关键：点从原始位置插值移动到目标形状中心
+        const x = pt.origin.x + (pt.target.x - pt.origin.x) * ease;
+        const y = pt.origin.y + (pt.target.y - pt.origin.y) * ease;
+
+        // 加一点随机抖动（前半段更明显）
+        const jitter = (1 - ease) * 4;
         const jx = (Math.random() - 0.5) * jitter;
         const jy = (Math.random() - 0.5) * jitter;
-        if (i === 0) ctx.moveTo(p.x + jx, p.y + jy);
-        else ctx.lineTo(p.x + jx, p.y + jy);
+
+        if (i === 0) ctx.moveTo(x + jx, y + jy);
+        else ctx.lineTo(x + jx, y + jy);
       }
       ctx.stroke();
       ctx.restore();
     }
 
-    // ---------- 2. 画正在生长的星星和月亮 ----------
+    // 2. 画正在生长的星星和月亮
     shapes.forEach(shape => {
-      // 位置从原路径点慢慢移到最终偏移位置
-      const x = shape.x + shape.offsetX * ease;
-      const y = shape.y + shape.offsetY * ease;
-      const size = shape.targetSize * ease;
-
-      if (size < 1.5) return;
-
-      // 透明度也随时间增加
-      const alpha = Math.min(ease * 1.4, 1);
+      const size = shape.size * Math.min(ease * 1.3, 1);
+      const alpha = Math.min(ease * 1.5, 1);
+      if (size < 2) return;
 
       if (shape.isStar) {
-        drawStar(x, y, size, shape.color, alpha);
+        drawStar(shape.x, shape.y, size, shape.color, alpha);
       } else {
-        drawMoon(x, y, size, shape.color, alpha);
+        drawMoon(shape.x, shape.y, size, shape.color, alpha);
       }
     });
 
     if (t < 1) {
       requestAnimationFrame(animate);
     } else {
-      // 动画结束，最终再画一次干净的版本
+      // 最终定格
       shapes.forEach(shape => {
-        const x = shape.x + shape.offsetX;
-        const y = shape.y + shape.offsetY;
         if (shape.isStar) {
-          drawStar(x, y, shape.targetSize, shape.color, 1);
+          drawStar(shape.x, shape.y, shape.size, shape.color, 1);
         } else {
-          drawMoon(x, y, shape.targetSize, shape.color, 1);
+          drawMoon(shape.x, shape.y, shape.size, shape.color, 1);
         }
       });
       isAnimating = false;
@@ -181,14 +198,14 @@ function drawStar(cx, cy, size, color, alpha = 1) {
   ctx.beginPath();
 
   const spikes = 5;
-  const outerRadius = size;
-  const innerRadius = size * 0.4;
+  const outer = size;
+  const inner = size * 0.4;
 
   for (let i = 0; i < spikes * 2; i++) {
-    const radius = i % 2 === 0 ? outerRadius : innerRadius;
-    const angle = (Math.PI / spikes) * i - Math.PI / 2;
-    const x = cx + Math.cos(angle) * radius;
-    const y = cy + Math.sin(angle) * radius;
+    const r = i % 2 === 0 ? outer : inner;
+    const a = (Math.PI / spikes) * i - Math.PI / 2;
+    const x = cx + Math.cos(a) * r;
+    const y = cy + Math.sin(a) * r;
     if (i === 0) ctx.moveTo(x, y);
     else ctx.lineTo(x, y);
   }
@@ -202,22 +219,21 @@ function drawMoon(cx, cy, size, color, alpha = 1) {
   ctx.save();
   ctx.globalAlpha = alpha;
 
-  // 大圆
   ctx.fillStyle = color;
   ctx.beginPath();
   ctx.arc(cx, cy, size, 0, Math.PI * 2);
   ctx.fill();
 
-  // 挖空变成新月（白色背景）
+  // 挖空
   ctx.fillStyle = '#ffffff';
   ctx.beginPath();
-  ctx.arc(cx + size * 0.38, cy - size * 0.12, size * 0.88, 0, Math.PI * 2);
+  ctx.arc(cx + size * 0.4, cy - size * 0.15, size * 0.9, 0, Math.PI * 2);
   ctx.fill();
 
   ctx.restore();
 }
 
-// 事件绑定
+// 事件
 canvas.addEventListener('mousedown', startDraw);
 canvas.addEventListener('mousemove', draw);
 canvas.addEventListener('mouseup', stopDraw);
@@ -234,7 +250,7 @@ clearBtn.addEventListener('click', () => {
 
 saveBtn.addEventListener('click', () => {
   const link = document.createElement('a');
-  link.download = 'star-moon.png';
+  link.download = 'morph.png';
   link.href = canvas.toDataURL('image/png');
   link.click();
 });
