@@ -11,7 +11,6 @@ let lastX = 0;
 let lastY = 0;
 let isAnimating = false;
 
-// 画布自适应
 function resizeCanvas() {
   canvas.width = window.innerWidth;
   canvas.height = window.innerHeight - 60;
@@ -65,55 +64,81 @@ function draw(e) {
 function stopDraw() {
   if (!drawing || isAnimating) return;
   drawing = false;
-  if (points.length < 10) return;
+  if (points.length < 8) return;
 
   isAnimating = true;
-  startBendMorph([...points]);
+  startSingleMorph([...points]);
 }
 
-// ==================== 核心：线条弯曲变形动画 ====================
-function startBendMorph(originalPoints) {
-  // 1. 决定最终要生成的形状位置（沿原路径分布）
-  const shapes = [];
-  const shapeCount = Math.min(Math.floor(originalPoints.length / 7) + 2, 12);
+// ==================== 单形状弯曲变形 ====================
+function startSingleMorph(originalPoints) {
+  // 计算笔画中心
+  let sumX = 0, sumY = 0;
+  originalPoints.forEach(p => {
+    sumX += p.x;
+    sumY += p.y;
+  });
+  const centerX = sumX / originalPoints.length;
+  const centerY = sumY / originalPoints.length;
 
-  for (let i = 0; i < shapeCount; i++) {
-    const idx = Math.floor((i / (shapeCount - 1 || 1)) * (originalPoints.length - 1));
-    const p = originalPoints[idx];
-    shapes.push({
-      x: p.x + (Math.random() - 0.5) * 20,
-      y: p.y + (Math.random() - 0.5) * 20,
-      size: 18 + Math.random() * 22,
-      color: ['#FFD700', '#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FFEAA7', '#DDA0DD', '#FF9FF3'][Math.floor(Math.random() * 8)],
-      isStar: Math.random() > 0.4
-    });
+  // 随机决定变成星星还是月亮
+  const isStar = Math.random() > 0.5;
+  const size = 28 + Math.random() * 30; // 最终大小
+  const color = ['#FFD700', '#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FFEAA7', '#DDA0DD', '#FF9FF3'][Math.floor(Math.random() * 8)];
+
+  // 生成目标形状的轮廓点（让线条能弯过去）
+  const targetPoints = [];
+  const pointCount = Math.max(originalPoints.length, 30);
+
+  if (isStar) {
+    // 五角星轮廓点
+    for (let i = 0; i < pointCount; i++) {
+      const t = i / pointCount;
+      const angle = t * Math.PI * 2 - Math.PI / 2;
+      const spikes = 5;
+      const r = (Math.floor(t * spikes * 2) % 2 === 0) ? size : size * 0.4;
+      // 让点更均匀分布在星形上
+      const spikeAngle = (Math.PI * 2 / spikes);
+      const localT = (t * spikes) % 1;
+      const a = Math.floor(t * spikes) * spikeAngle - Math.PI / 2;
+      const outer = size;
+      const inner = size * 0.4;
+      const radius = localT < 0.5 ? 
+        outer + (inner - outer) * (localT * 2) : 
+        inner + (outer - inner) * ((localT - 0.5) * 2);
+      targetPoints.push({
+        x: centerX + Math.cos(a + localT * spikeAngle) * radius,
+        y: centerY + Math.sin(a + localT * spikeAngle) * radius
+      });
+    }
+  } else {
+    // 新月轮廓（用两个圆的差近似，这里用一个偏心圆做目标）
+    for (let i = 0; i < pointCount; i++) {
+      const angle = (i / pointCount) * Math.PI * 2;
+      // 主圆
+      let x = centerX + Math.cos(angle) * size;
+      let y = centerY + Math.sin(angle) * size;
+      // 稍微往一边挤，模拟新月感
+      x += Math.cos(angle) * size * 0.15 * Math.sin(angle * 2);
+      targetPoints.push({ x, y });
+    }
   }
 
-  // 2. 给原路径的每个点分配一个「目标形状」
-  const pointTargets = originalPoints.map((p, i) => {
-    // 找到最近的形状
-    let nearest = shapes[0];
-    let minDist = Infinity;
-    shapes.forEach(s => {
-      const d = (p.x - s.x) ** 2 + (p.y - s.y) ** 2;
-      if (d < minDist) {
-        minDist = d;
-        nearest = s;
-      }
-    });
+  // 把原始点映射到目标点（按比例）
+  const mapped = originalPoints.map((p, i) => {
+    const idx = Math.floor((i / (originalPoints.length - 1 || 1)) * (targetPoints.length - 1));
     return {
       origin: { x: p.x, y: p.y },
-      target: { x: nearest.x, y: nearest.y },
-      shape: nearest
+      target: targetPoints[idx]
     };
   });
 
-  const duration = 1800; // 变形总时长（毫秒）
+  const duration = 1600;
   const startTime = performance.now();
 
-  // 先把原来的实线用半透明白色稍微盖一层，方便后面动画覆盖
-  ctx.strokeStyle = 'rgba(255,255,255,0.7)';
-  ctx.lineWidth = Number(sizeInput.value) + 6;
+  // 先盖住原线
+  ctx.strokeStyle = 'rgba(255,255,255,0.75)';
+  ctx.lineWidth = Number(sizeInput.value) + 8;
   ctx.beginPath();
   ctx.moveTo(originalPoints[0].x, originalPoints[0].y);
   for (let i = 1; i < originalPoints.length; i++) {
@@ -124,31 +149,23 @@ function startBendMorph(originalPoints) {
   function animate(now) {
     const elapsed = now - startTime;
     let t = Math.min(elapsed / duration, 1);
+    const ease = 1 - Math.pow(1 - t, 2.2); // 先快后慢
 
-    // 缓动曲线（先慢后快再慢，更有「被拉过去」的感觉）
-    const ease = t < 0.5 
-      ? 2 * t * t 
-      : 1 - Math.pow(-2 * t + 2, 2) / 2;
-
-    // ---------- 清空当前帧需要重画的区域（用白色覆盖整条原路径附近） ----------
-    // 为了简单稳定，我们每帧都重新画变形中的线 + 形状
-
-    // 1. 画正在弯曲收缩的线条
-    if (t < 0.92) {
+    // 画正在弯曲的线条
+    if (t < 0.95) {
       ctx.save();
-      ctx.globalAlpha = 1 - ease * 0.85;
+      ctx.globalAlpha = 1 - ease * 0.7;
       ctx.strokeStyle = colorInput.value;
-      ctx.lineWidth = Number(sizeInput.value) * (1 - ease * 0.6);
+      ctx.lineWidth = Number(sizeInput.value) * (1 - ease * 0.5);
       ctx.beginPath();
 
-      for (let i = 0; i < pointTargets.length; i++) {
-        const pt = pointTargets[i];
-        // 关键：点从原始位置插值移动到目标形状中心
-        const x = pt.origin.x + (pt.target.x - pt.origin.x) * ease;
-        const y = pt.origin.y + (pt.target.y - pt.origin.y) * ease;
+      for (let i = 0; i < mapped.length; i++) {
+        const m = mapped[i];
+        const x = m.origin.x + (m.target.x - m.origin.x) * ease;
+        const y = m.origin.y + (m.target.y - m.origin.y) * ease;
 
-        // 加一点随机抖动（前半段更明显）
-        const jitter = (1 - ease) * 4;
+        // 轻微抖动（前半段）
+        const jitter = (1 - ease) * 3.5;
         const jx = (Math.random() - 0.5) * jitter;
         const jy = (Math.random() - 0.5) * jitter;
 
@@ -159,30 +176,26 @@ function startBendMorph(originalPoints) {
       ctx.restore();
     }
 
-    // 2. 画正在生长的星星和月亮
-    shapes.forEach(shape => {
-      const size = shape.size * Math.min(ease * 1.3, 1);
-      const alpha = Math.min(ease * 1.5, 1);
-      if (size < 2) return;
-
-      if (shape.isStar) {
-        drawStar(shape.x, shape.y, size, shape.color, alpha);
+    // 同时生长最终形状
+    const currentSize = size * Math.min(ease * 1.25, 1);
+    const alpha = Math.min(ease * 1.4, 1);
+    if (currentSize > 3) {
+      if (isStar) {
+        drawStar(centerX, centerY, currentSize, color, alpha);
       } else {
-        drawMoon(shape.x, shape.y, size, shape.color, alpha);
+        drawMoon(centerX, centerY, currentSize, color, alpha);
       }
-    });
+    }
 
     if (t < 1) {
       requestAnimationFrame(animate);
     } else {
       // 最终定格
-      shapes.forEach(shape => {
-        if (shape.isStar) {
-          drawStar(shape.x, shape.y, shape.size, shape.color, 1);
-        } else {
-          drawMoon(shape.x, shape.y, shape.size, shape.color, 1);
-        }
-      });
+      if (isStar) {
+        drawStar(centerX, centerY, size, color, 1);
+      } else {
+        drawMoon(centerX, centerY, size, color, 1);
+      }
       isAnimating = false;
     }
   }
@@ -224,7 +237,6 @@ function drawMoon(cx, cy, size, color, alpha = 1) {
   ctx.arc(cx, cy, size, 0, Math.PI * 2);
   ctx.fill();
 
-  // 挖空
   ctx.fillStyle = '#ffffff';
   ctx.beginPath();
   ctx.arc(cx + size * 0.4, cy - size * 0.15, size * 0.9, 0, Math.PI * 2);
@@ -233,7 +245,7 @@ function drawMoon(cx, cy, size, color, alpha = 1) {
   ctx.restore();
 }
 
-// 事件
+// 事件绑定
 canvas.addEventListener('mousedown', startDraw);
 canvas.addEventListener('mousemove', draw);
 canvas.addEventListener('mouseup', stopDraw);
