@@ -6,9 +6,10 @@ const clearBtn = document.getElementById('clear');
 const saveBtn = document.getElementById('save');
 
 let drawing = false;
-let points = [];          // 记录当前笔画的所有点
+let points = [];
 let lastX = 0;
 let lastY = 0;
+let isAnimating = false; // 防止动画期间重复触发
 
 // 设置画布大小
 function resizeCanvas() {
@@ -20,7 +21,7 @@ function resizeCanvas() {
 resizeCanvas();
 window.addEventListener('resize', resizeCanvas);
 
-// 获取坐标（兼容鼠标和触摸）
+// 获取坐标
 function getPos(e) {
   const rect = canvas.getBoundingClientRect();
   if (e.touches && e.touches.length > 0) {
@@ -37,20 +38,21 @@ function getPos(e) {
 
 // 开始画
 function startDraw(e) {
+  if (isAnimating) return;
   drawing = true;
   points = [];
   const pos = getPos(e);
   lastX = pos.x;
   lastY = pos.y;
-  points.push(pos);
+  points.push({ x: pos.x, y: pos.y });
 }
 
-// 画（实时预览自由线条）
+// 画（实时预览）
 function draw(e) {
-  if (!drawing) return;
+  if (!drawing || isAnimating) return;
   e.preventDefault();
   const pos = getPos(e);
-  points.push(pos);
+  points.push({ x: pos.x, y: pos.y });
 
   ctx.strokeStyle = colorInput.value;
   ctx.lineWidth = sizeInput.value;
@@ -63,57 +65,91 @@ function draw(e) {
   lastY = pos.y;
 }
 
-// 结束画 → 清除自由笔画，换成星星和月亮
+// 结束画 → 启动动画
 function stopDraw() {
-  if (!drawing) return;
+  if (!drawing || isAnimating) return;
   drawing = false;
 
-  if (points.length < 3) return; // 太短的笔画忽略
+  if (points.length < 6) return;
 
-  // 1. 先把刚才画的自由线条清掉（用白色覆盖）
-  ctx.globalCompositeOperation = 'destination-out';
-  ctx.lineWidth = sizeInput.value + 4; // 稍微粗一点确保覆盖干净
-  ctx.beginPath();
-  ctx.moveTo(points[0].x, points[0].y);
-  for (let i = 1; i < points.length; i++) {
-    ctx.lineTo(points[i].x, points[i].y);
-  }
-  ctx.stroke();
-  ctx.globalCompositeOperation = 'source-over';
-
-  // 2. 根据笔画长度决定生成几个图形
-  const count = Math.min(Math.floor(points.length / 8) + 1, 8); // 最多8个
-
-  for (let i = 0; i < count; i++) {
-    // 从路径中均匀取点
-    const idx = Math.floor((i / count) * (points.length - 1));
-    const p = points[idx];
-
-    // 随机偏移一点，避免完全重叠
-    const offsetX = (Math.random() - 0.5) * 40;
-    const offsetY = (Math.random() - 0.5) * 40;
-    const x = p.x + offsetX;
-    const y = p.y + offsetY;
-
-    // 随机大小
-    const size = 12 + Math.random() * 22;
-
-    // 随机颜色（也可固定用当前颜色）
-    const colors = ['#FFD700', '#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FFEAA7', '#DDA0DD'];
-    const color = colors[Math.floor(Math.random() * colors.length)];
-
-    // 随机画星星或月亮
-    if (Math.random() > 0.45) {
-      drawStar(x, y, size, color);
-    } else {
-      drawMoon(x, y, size, color);
-    }
-  }
+  isAnimating = true;
+  startMorphAnimation(points);
 }
 
-// ========== 画五角星 ==========
-function drawStar(cx, cy, size, color) {
+// ==================== 核心动画 ====================
+function startMorphAnimation(strokePoints) {
+  // 预先决定要生成的星星/月亮位置和类型
+  const shapes = [];
+  const count = Math.min(Math.floor(strokePoints.length / 5) + 2, 12);
+
+  for (let i = 0; i < count; i++) {
+    const idx = Math.floor((i / (count - 1 || 1)) * (strokePoints.length - 1));
+    const p = strokePoints[idx];
+    shapes.push({
+      x: p.x + (Math.random() - 0.5) * 30,
+      y: p.y + (Math.random() - 0.5) * 30,
+      size: 14 + Math.random() * 22,
+      color: ['#FFD700', '#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FFEAA7', '#DDA0DD', '#FF9FF3'][Math.floor(Math.random() * 8)],
+      isStar: Math.random() > 0.4,
+      progress: 0
+    });
+  }
+
+  const duration = 1200; // 动画时长（毫秒）
+  const startTime = performance.now();
+
+  // 先用白色把自由线盖住（准备消失）
+  ctx.strokeStyle = '#ffffff';
+  ctx.lineWidth = Number(sizeInput.value) + 10;
+  ctx.beginPath();
+  ctx.moveTo(strokePoints[0].x, strokePoints[0].y);
+  for (let i = 1; i < strokePoints.length; i++) {
+    ctx.lineTo(strokePoints[i].x, strokePoints[i].y);
+  }
+  ctx.stroke();
+
+  function animate(now) {
+    const elapsed = now - startTime;
+    const t = Math.min(elapsed / duration, 1); // 0 → 1
+
+    // 使用缓动（先快后慢）
+    const ease = 1 - Math.pow(1 - t, 3);
+
+    // 每一帧重新画一次当前状态的星星月亮
+    // （因为我们要让它们从小变大）
+    shapes.forEach(shape => {
+      const currentSize = shape.size * ease;
+      if (currentSize < 1) return;
+
+      if (shape.isStar) {
+        drawStar(shape.x, shape.y, currentSize, shape.color, ease);
+      } else {
+        drawMoon(shape.x, shape.y, currentSize, shape.color, ease);
+      }
+    });
+
+    if (t < 1) {
+      requestAnimationFrame(animate);
+    } else {
+      // 动画结束，再最终画一次确保完整
+      shapes.forEach(shape => {
+        if (shape.isStar) {
+          drawStar(shape.x, shape.y, shape.size, shape.color, 1);
+        } else {
+          drawMoon(shape.x, shape.y, shape.size, shape.color, 1);
+        }
+      });
+      isAnimating = false;
+    }
+  }
+
+  requestAnimationFrame(animate);
+}
+
+// 画五角星（支持透明度）
+function drawStar(cx, cy, size, color, alpha = 1) {
   ctx.save();
+  ctx.globalAlpha = alpha;
   ctx.fillStyle = color;
   ctx.beginPath();
 
@@ -134,23 +170,23 @@ function drawStar(cx, cy, size, color) {
   ctx.restore();
 }
 
-// ========== 画月亮（新月） ==========
-function drawMoon(cx, cy, size, color) {
+// 画新月（支持透明度）
+function drawMoon(cx, cy, size, color, alpha = 1) {
   ctx.save();
-  ctx.fillStyle = color;
+  ctx.globalAlpha = alpha;
 
   // 大圆
+  ctx.fillStyle = color;
   ctx.beginPath();
   ctx.arc(cx, cy, size, 0, Math.PI * 2);
   ctx.fill();
 
-  // 用背景色挖掉一部分变成新月（这里用白色，如果背景不是白色可改）
-  ctx.globalCompositeOperation = 'destination-out';
+  // 挖掉一部分变成新月
+  ctx.fillStyle = '#ffffff';
   ctx.beginPath();
-  ctx.arc(cx + size * 0.35, cy - size * 0.1, size * 0.85, 0, Math.PI * 2);
+  ctx.arc(cx + size * 0.38, cy - size * 0.12, size * 0.88, 0, Math.PI * 2);
   ctx.fill();
 
-  ctx.globalCompositeOperation = 'source-over';
   ctx.restore();
 }
 
@@ -158,7 +194,7 @@ function drawMoon(cx, cy, size, color) {
 canvas.addEventListener('mousedown', startDraw);
 canvas.addEventListener('mousemove', draw);
 canvas.addEventListener('mouseup', stopDraw);
-canvas.addEventListener('mouseout', stopDraw);
+canvas.addEventListener('mouseleave', stopDraw);
 
 canvas.addEventListener('touchstart', startDraw, { passive: false });
 canvas.addEventListener('touchmove', draw, { passive: false });
@@ -166,13 +202,14 @@ canvas.addEventListener('touchend', stopDraw);
 
 // 清空
 clearBtn.addEventListener('click', () => {
+  if (isAnimating) return;
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 });
 
 // 保存
 saveBtn.addEventListener('click', () => {
   const link = document.createElement('a');
-  link.download = 'star-moon-drawing.png';
+  link.download = 'star-moon.png';
   link.href = canvas.toDataURL('image/png');
   link.click();
 });
