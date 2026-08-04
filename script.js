@@ -85,37 +85,7 @@ function drawImageCentered(img) {
   ctx.drawImage(img, x, y, w, h);
 }
 
-// ========== 加载 MediaPipe ==========
-async function loadMediaPipe() {
-  if (selfieSegmentation) return selfieSegmentation;
-
-  // 动态加载 MediaPipe
-  await loadScript('https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/selfie_segmentation.js');
-  await loadScript('https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js');
-
-  selfieSegmentation = new SelfieSegmentation({
-    locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/${file}`
-  });
-
-  selfieSegmentation.setOptions({
-    modelSelection: 1, // 0=通用，1=人像更准
-  });
-
-  return selfieSegmentation;
-}
-
-function loadScript(src) {
-  return new Promise((resolve, reject) => {
-    if (document.querySelector(`script[src="${src}"]`)) return resolve();
-    const s = document.createElement('script');
-    s.src = src;
-    s.onload = resolve;
-    s.onerror = reject;
-    document.head.appendChild(s);
-  });
-}
-
-// ========== AI 抠图 ==========
+// ========== AI 抠图 (调用后端 rembg 服务) ==========
 async function doAIRemoveBackground() {
   if (!currentImage) {
     alert('请先插入一张图片');
@@ -123,12 +93,54 @@ async function doAIRemoveBackground() {
   }
 
   aiRemoveBgBtn.disabled = true;
-  aiRemoveBgBtn.textContent = '加载模型中...';
+  aiRemoveBgBtn.textContent = '正在抠图...';
 
   try {
-    const segmenter = await loadMediaPipe();
+    // 1. 将当前的 currentImage 绘制到临时 canvas 并导出为 Blob 文件对象
+    const tempCanvas = document.createElement('canvas');
+    tempCanvas.width = currentImage.naturalWidth || currentImage.width;
+    tempCanvas.height = currentImage.naturalHeight || currentImage.height;
+    const tempCtx = tempCanvas.getContext('2d');
+    tempCtx.drawImage(currentImage, 0, 0);
 
-    aiRemoveBgBtn.textContent = '正在抠图...';
+    const blob = await new Promise((resolve) => tempCanvas.toBlob(resolve, 'image/png'));
+
+    // 2. 构建 FormData 参数
+    const formData = new FormData();
+    formData.append('file', blob, 'input.png');
+
+    // 3. 替换为你在 Cloudflare 拿到的 HTTPS 接口地址（注意末尾必须是 /api/remove）
+    const REMBG_API_URL = 'https://这里替换成你的xxx.trycloudflare.com/api/remove';
+
+    const response = await fetch(REMBG_API_URL, {
+      method: 'POST',
+      body: formData,
+    });
+
+    if (!response.ok) {
+      throw new Error(`请求失败，状态码: ${response.status}`);
+    }
+
+    // 4. 获取返回的透明背景图片 Blob 数据并加载到画板上
+    const resultBlob = await response.blob();
+    const resultImg = new Image();
+    
+    resultImg.onload = () => {
+      drawImageCentered(resultImg);
+      currentImage = resultImg; // 更新为抠好背景后的新图
+      aiRemoveBgBtn.textContent = 'AI 抠图';
+      aiRemoveBgBtn.disabled = false;
+    };
+
+    resultImg.src = URL.createObjectURL(resultBlob);
+
+  } catch (err) {
+    console.error('抠图失败:', err);
+    alert('抠图失败，请检查后端服务或网络连接');
+    aiRemoveBgBtn.textContent = 'AI 抠图';
+    aiRemoveBgBtn.disabled = false;
+  }
+}
 
     // 创建临时 canvas 处理原图
     const tempCanvas = document.createElement('canvas');
