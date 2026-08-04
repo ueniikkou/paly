@@ -96,7 +96,7 @@ async function doAIRemoveBackground() {
   aiRemoveBgBtn.textContent = '正在抠图...';
 
   try {
-    // 1. 将当前的 currentImage 绘制到临时 canvas 并导出为 Blob 文件对象
+    // 1. 将当前的 currentImage 绘制到临时 canvas 并导出为 Blob
     const tempCanvas = document.createElement('canvas');
     tempCanvas.width = currentImage.naturalWidth || currentImage.width;
     tempCanvas.height = currentImage.naturalHeight || currentImage.height;
@@ -109,8 +109,8 @@ async function doAIRemoveBackground() {
     const formData = new FormData();
     formData.append('file', blob, 'input.png');
 
-    // 3. 替换为你在 Cloudflare 拿到的 HTTPS 接口地址（注意末尾必须是 /api/remove）
-    const REMBG_API_URL = 'https://这里替换成你的xxx.trycloudflare.com/api/remove';
+    // 3. 后端 rembg 服务的 API 地址（已绑定你的 HTTPS 穿透域名）
+    const REMBG_API_URL = 'https://modems-ide-hygiene-departure.trycloudflare.com/api/remove';
 
     const response = await fetch(REMBG_API_URL, {
       method: 'POST',
@@ -127,7 +127,7 @@ async function doAIRemoveBackground() {
     
     resultImg.onload = () => {
       drawImageCentered(resultImg);
-      currentImage = resultImg; // 更新为抠好背景后的新图
+      currentImage = resultImg; // 更新 currentImage 为抠好背景后的图
       aiRemoveBgBtn.textContent = 'AI 抠图';
       aiRemoveBgBtn.disabled = false;
     };
