@@ -10,15 +10,17 @@ const fileInput = document.getElementById('fileInput');
 
 let drawing = false;
 let lastX = 0, lastY = 0;
-let currentImage = null; // 原图
-let selfieSegmentation = null;
+let currentImage = null; // 当前画板上的图片
 
-// 画布大小
+// 自适应画布大小
 function resizeCanvas() {
   canvas.width = window.innerWidth;
   canvas.height = window.innerHeight - 60;
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
+  if (currentImage) {
+    drawImageCentered(currentImage);
+  }
 }
 resizeCanvas();
 window.addEventListener('resize', resizeCanvas);
@@ -57,7 +59,7 @@ function stopDraw() {
 // ========== 插入图片 ==========
 function insertImage(file) {
   if (!file || !file.type.startsWith('image/')) {
-    alert('请选择图片');
+    alert('请选择正确的图片格式');
     return;
   }
   const reader = new FileReader();
@@ -88,7 +90,7 @@ function drawImageCentered(img) {
 // ========== AI 抠图 (调用后端 rembg 服务) ==========
 async function doAIRemoveBackground() {
   if (!currentImage) {
-    alert('请先插入一张图片');
+    alert('请先插入一张图片！');
     return;
   }
 
@@ -96,7 +98,6 @@ async function doAIRemoveBackground() {
   aiRemoveBgBtn.textContent = '正在抠图...';
 
   try {
-    // 1. 将当前的 currentImage 绘制到临时 canvas 并导出为 Blob
     const tempCanvas = document.createElement('canvas');
     tempCanvas.width = currentImage.naturalWidth || currentImage.width;
     tempCanvas.height = currentImage.naturalHeight || currentImage.height;
@@ -105,11 +106,10 @@ async function doAIRemoveBackground() {
 
     const blob = await new Promise((resolve) => tempCanvas.toBlob(resolve, 'image/png'));
 
-    // 2. 构建 FormData 参数
     const formData = new FormData();
     formData.append('file', blob, 'input.png');
 
-    // 3. 后端 rembg 服务的 API 地址（已绑定你的 HTTPS 穿透域名）
+    // 替换为你的最新 Cloudflare HTTPS 穿透地址
     const REMBG_API_URL = 'https://modems-ide-hygiene-departure.trycloudflare.com/api/remove';
 
     const response = await fetch(REMBG_API_URL, {
@@ -121,13 +121,12 @@ async function doAIRemoveBackground() {
       throw new Error(`请求失败，状态码: ${response.status}`);
     }
 
-    // 4. 获取返回的透明背景图片 Blob 数据并加载到画板上
     const resultBlob = await response.blob();
     const resultImg = new Image();
     
     resultImg.onload = () => {
       drawImageCentered(resultImg);
-      currentImage = resultImg; // 更新 currentImage 为抠好背景后的图
+      currentImage = resultImg;
       aiRemoveBgBtn.textContent = 'AI 抠图';
       aiRemoveBgBtn.disabled = false;
     };
@@ -136,63 +135,13 @@ async function doAIRemoveBackground() {
 
   } catch (err) {
     console.error('抠图失败:', err);
-    alert('抠图失败，请检查后端服务或网络连接');
+    alert('抠图失败，请检查网络或后端服务连接！');
     aiRemoveBgBtn.textContent = 'AI 抠图';
     aiRemoveBgBtn.disabled = false;
   }
 }
 
-    // 创建临时 canvas 处理原图
-    const tempCanvas = document.createElement('canvas');
-    tempCanvas.width = currentImage.naturalWidth || currentImage.width;
-    tempCanvas.height = currentImage.naturalHeight || currentImage.height;
-    const tempCtx = tempCanvas.getContext('2d');
-    tempCtx.drawImage(currentImage, 0, 0);
-
-    // 运行分割
-    await new Promise((resolve) => {
-      segmenter.onResults((results) => {
-        // results.segmentationMask 是遮罩
-        const mask = results.segmentationMask;
-
-        // 把原图和遮罩合成透明背景
-        const outCanvas = document.createElement('canvas');
-        outCanvas.width = tempCanvas.width;
-        outCanvas.height = tempCanvas.height;
-        const outCtx = outCanvas.getContext('2d');
-
-        // 画原图
-        outCtx.drawImage(tempCanvas, 0, 0);
-
-        // 使用遮罩把背景变透明
-        outCtx.globalCompositeOperation = 'destination-in';
-        outCtx.drawImage(mask, 0, 0, outCanvas.width, outCanvas.height);
-
-        // 显示结果
-        const resultImg = new Image();
-        resultImg.onload = () => {
-          drawImageCentered(resultImg);
-          currentImage = resultImg; // 更新为抠好的图
-          resolve();
-        };
-        resultImg.src = outCanvas.toDataURL('image/png');
-      });
-
-      segmenter.send({ image: tempCanvas });
-    });
-
-    aiRemoveBgBtn.textContent = 'AI 抠图（人像）';
-    aiRemoveBgBtn.disabled = false;
-
-  } catch (err) {
-    console.error(err);
-    alert('抠图失败，请换一张人像图片试试，或检查网络');
-    aiRemoveBgBtn.textContent = 'AI 抠图（人像）';
-    aiRemoveBgBtn.disabled = false;
-  }
-}
-
-// 事件
+// ========== 事件绑定 ==========
 canvas.addEventListener('mousedown', startDraw);
 canvas.addEventListener('mousemove', draw);
 canvas.addEventListener('mouseup', stopDraw);
@@ -215,7 +164,9 @@ saveBtn.onclick = () => {
 
 insertImgBtn.onclick = () => fileInput.click();
 fileInput.onchange = (e) => {
-  if (e.target.files[0]) insertImage(e.target.files[0]);
+  if (e.target.files && e.target.files[0]) {
+    insertImage(e.target.files[0]);
+  }
   fileInput.value = '';
 };
 
